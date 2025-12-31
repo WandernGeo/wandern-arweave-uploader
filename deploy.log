@@ -1,0 +1,54 @@
+🚀 Deploying arweave-uploader...
+Preparing function...
+.......done.
+Deploying function...
+[Build]...................................................................................................................................................................................................................................................................................................................................................................................done
+[Service].............................................................................................................................................................................done
+Done.
+You can view your function in the Cloud Console here: https://console.cloud.google.com/functions/details/us-central1/arweave-uploader?project=wandern-project-startup
+
+buildConfig:
+  automaticUpdatePolicy: {}
+  build: projects/1071951656531/locations/us-central1/builds/759a0ef6-46fa-4fd8-8b5f-e0097422d95a
+  dockerRegistry: ARTIFACT_REGISTRY
+  dockerRepository: projects/wandern-project-startup/locations/us-central1/repositories/gcf-artifacts
+  entryPoint: upload_batch
+  runtime: python311
+  serviceAccount: projects/wandern-project-startup/serviceAccounts/1071951656531-compute@developer.gserviceaccount.com
+  source:
+    storageSource:
+      bucket: gcf-v2-sources-1071951656531-us-central1
+      generation: '1767205962802730'
+      object: arweave-uploader/function-source.zip
+  sourceProvenance:
+    resolvedStorageSource:
+      bucket: gcf-v2-sources-1071951656531-us-central1
+      generation: '1767205962802730'
+      object: arweave-uploader/function-source.zip
+createTime: '2025-12-31T18:32:43.023936490Z'
+environment: GEN_2
+labels:
+  deployment-tool: cli-gcloud
+name: projects/wandern-project-startup/locations/us-central1/functions/arweave-uploader
+satisfiesPzi: true
+serviceConfig:
+  allTrafficOnLatestRevision: true
+  availableCpu: '0.3333'
+  availableMemory: 512M
+  environmentVariables:
+    DB_CONNECTION_NAME: wandern-project-startup:us-central1:wandern-postgres
+    DB_NAME: wandern_db
+    DB_USER: wandern_app
+    LOG_EXECUTION_ID: 'true'
+  ingressSettings: ALLOW_ALL
+  maxInstanceRequestConcurrency: 1
+  revision: arweave-uploader-00001-kad
+  service: projects/wandern-project-startup/locations/us-central1/services/arweave-uploader
+  serviceAccountEmail: 1071951656531-compute@developer.gserviceaccount.com
+  timeoutSeconds: 300
+  uri: https://arweave-uploader-zdku5kri5a-uc.a.run.app
+state: ACTIVE
+updateTime: '2025-12-31T18:33:35.698592123Z'
+url: https://us-central1-wandern-project-startup.cloudfunctions.net/arweave-uploader
+✅ Deploy complete!
+URL: https://us-central1-wandern-project-startup.cloudfunctions.net/arweave-uploader
