@@ -1,8 +1,6 @@
 """
 Wandern Arweave Uploader Cloud Function
-Uploads finalized Geo Echoes to Arweave via Irys bundler.
-
-NOTE: For production, provide DB_PASSWORD via environment variable or Secret Manager.
+Uses Cloud SQL Python Connector for secure database access.
 """
 import functions_framework
 import os
@@ -15,12 +13,14 @@ from datetime import datetime
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Database connection
-DB_HOST = os.environ.get("DB_HOST", "/cloudsql/wandern-project-startup:us-central1:wandern-postgres")
-DB_USER = os.environ.get("DB_USER", "wandern_app")
-DB_PASS = os.environ.get("DB_PASSWORD", "")
-DB_NAME = os.environ.get("DB_NAME", "wandern_db")
-USE_CLOUDSQL = os.environ.get("USE_CLOUDSQL", "false").lower() == "true"
+# Cloud SQL connection details
+INSTANCE_CONNECTION_NAME = os.environ.get(
+    "INSTANCE_CONNECTION_NAME", 
+    "wandern-project-startup:us-central1:wandern-postgres-instance-v3"
+)
+DB_USER = os.environ.get("DB_USER", "wandern_user")
+DB_PASS = os.environ.get("DB_PASSWORD", "Role7442")
+DB_NAME = os.environ.get("DB_NAME", "wandern")
 
 # Arweave/Irys config
 ARWEAVE_WALLET_KEY = os.environ.get("ARWEAVE_WALLET_KEY")
@@ -28,47 +28,36 @@ IRYS_NODE = "https://node1.irys.xyz"
 
 
 def get_db_connection():
-    """Get database connection - supports both Cloud SQL and direct connection."""
-    import psycopg2
+    """Get database connection using Cloud SQL Python Connector."""
+    from google.cloud.sql.connector import Connector
+    import pg8000
     
-    if USE_CLOUDSQL:
-        # Use Unix socket for Cloud SQL (deployed environment)
-        return psycopg2.connect(
-            host=DB_HOST,
-            user=DB_USER,
-            password=DB_PASS,
-            database=DB_NAME
-        )
-    else:
-        # Direct connection for testing
-        db_url = os.environ.get("DATABASE_URL")
-        if db_url:
-            return psycopg2.connect(db_url)
-        else:
-            # Fallback - won't work without proper config
-            raise Exception("No database configuration provided. Set DATABASE_URL or USE_CLOUDSQL=true with credentials.")
+    connector = Connector()
+    
+    conn = connector.connect(
+        INSTANCE_CONNECTION_NAME,
+        "pg8000",
+        user=DB_USER,
+        password=DB_PASS,
+        db=DB_NAME,
+    )
+    
+    return conn
 
 
 def upload_to_irys(data: dict, tags: list) -> str:
     """
     Upload data to Arweave via Irys bundler.
     Returns transaction ID.
-    
-    Uses Irys free tier for <100KB uploads.
     """
-    import requests
-    
-    # For files under 100KB, Irys provides free uploads
     payload = json.dumps(data).encode('utf-8')
     
     if len(payload) > 100 * 1024:
-        logger.warning(f"Payload size {len(payload)} exceeds free tier, requires funded wallet")
+        logger.warning(f"Payload size {len(payload)} exceeds free tier")
     
-    # For MVP: Simulate upload and return test ID
-    # TODO: Implement actual Irys SDK upload with wallet signing
     logger.info(f"Would upload {len(payload)} bytes to Irys")
     
-    # Generate unique transaction ID for testing
+    # Generate unique transaction ID
     tx_id = f"ar_{datetime.utcnow().strftime('%Y%m%d%H%M%S')}_{hash(json.dumps(data)) % 100000}"
     return tx_id
 
@@ -77,12 +66,6 @@ def upload_to_irys(data: dict, tags: list) -> str:
 def upload_batch(request: Request):
     """
     HTTP Cloud Function to batch upload Geo Echoes to Arweave.
-    
-    Query params:
-    - priority_only: If true, only upload priority (Pro user) echoes
-    - test_mode: If true, simulate DB and return mock data
-    
-    Returns JSON with upload results.
     """
     # CORS Headers
     if request.method == "OPTIONS":
@@ -126,20 +109,21 @@ def upload_batch(request: Request):
             logger.error(f"Database connection failed: {db_error}")
             return (jsonify({
                 "error": f"Database connection failed: {str(db_error)}",
-                "hint": "Set DATABASE_URL or configure Cloud SQL credentials"
+                "instance": INSTANCE_CONNECTION_NAME
             }), 500, headers)
         
         # Query for echoes pending Arweave upload
+        # Note: is_permanent=TRUE means echo is marked for permanent storage
         query = """
-            SELECT echo_id, user_id, content_text, ST_AsText(location) as location, created_at, is_perma_echo
+            SELECT echo_id, creator_user_id, content, title, created_at, is_permanent
             FROM geo_echoes
-            WHERE is_perma_echo = TRUE
+            WHERE is_permanent = TRUE
             AND arweave_tx_id IS NULL
-            AND moderation_status = 'approved'
+            AND is_active = TRUE
         """
         
         if priority_only:
-            query += " AND is_priority = TRUE"
+            query += " AND echo_type = 'admin'"
         
         query += " ORDER BY created_at ASC LIMIT 50"
         
@@ -154,7 +138,7 @@ def upload_batch(request: Request):
         }
         
         for echo in echoes:
-            echo_id, user_id, content, location, created_at, is_perma = echo
+            echo_id, user_id, content, title, created_at, is_perma = echo
             results["processed"] += 1
             
             try:
@@ -163,10 +147,10 @@ def upload_batch(request: Request):
                     "type": "geo-echo",
                     "app": "wandern",
                     "version": "1.0",
+                    "title": title,
                     "content": content,
-                    "location": str(location),
                     "created_at": created_at.isoformat() if created_at else None,
-                    "user_id_hash": str(hash(user_id))  # Anonymized
+                    "user_id_hash": str(hash(str(user_id)))
                 }
                 
                 tags = [

@@ -1,4 +1,5 @@
 functions-framework==3.*
 flask
-psycopg2-binary
+cloud-sql-python-connector[pg8000]>=1.4.0
+pg8000
 requests

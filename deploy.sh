@@ -19,7 +19,7 @@ gcloud functions deploy $FUNCTION_NAME \
     --allow-unauthenticated \
     --memory=512MB \
     --timeout=300s \
-    --set-env-vars="DB_CONNECTION_NAME=wandern-project-startup:us-central1:wandern-postgres,DB_USER=wandern_app,DB_NAME=wandern_db" \
+    --set-env-vars="INSTANCE_CONNECTION_NAME=wandern-project-startup:us-central1:wandern-postgres-instance-v3,DB_USER=wandern_user,DB_PASSWORD=Role7442,DB_NAME=wandern" \
     --project=$PROJECT_ID
 
 echo "✅ Deploy complete!"
