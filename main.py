@@ -1,6 +1,8 @@
 """
 Wandern Arweave Uploader Cloud Function
 Uploads finalized Geo Echoes to Arweave via Irys bundler.
+
+NOTE: For production, provide DB_PASSWORD via environment variable or Secret Manager.
 """
 import functions_framework
 import os
@@ -14,10 +16,11 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Database connection
-DB_CONNECTION_NAME = os.environ.get("DB_CONNECTION_NAME", "wandern-project-startup:us-central1:wandern-postgres")
+DB_HOST = os.environ.get("DB_HOST", "/cloudsql/wandern-project-startup:us-central1:wandern-postgres")
 DB_USER = os.environ.get("DB_USER", "wandern_app")
-DB_PASS = os.environ.get("DB_PASSWORD")
+DB_PASS = os.environ.get("DB_PASSWORD", "")
 DB_NAME = os.environ.get("DB_NAME", "wandern_db")
+USE_CLOUDSQL = os.environ.get("USE_CLOUDSQL", "false").lower() == "true"
 
 # Arweave/Irys config
 ARWEAVE_WALLET_KEY = os.environ.get("ARWEAVE_WALLET_KEY")
@@ -25,22 +28,25 @@ IRYS_NODE = "https://node1.irys.xyz"
 
 
 def get_db_connection():
-    """Get database connection using Cloud SQL Python Connector."""
-    from google.cloud.sql.connector import Connector
-    import pg8000
+    """Get database connection - supports both Cloud SQL and direct connection."""
+    import psycopg2
     
-    connector = Connector()
-    
-    def getconn():
-        return connector.connect(
-            DB_CONNECTION_NAME,
-            "pg8000",
+    if USE_CLOUDSQL:
+        # Use Unix socket for Cloud SQL (deployed environment)
+        return psycopg2.connect(
+            host=DB_HOST,
             user=DB_USER,
             password=DB_PASS,
-            db=DB_NAME,
+            database=DB_NAME
         )
-    
-    return getconn()
+    else:
+        # Direct connection for testing
+        db_url = os.environ.get("DATABASE_URL")
+        if db_url:
+            return psycopg2.connect(db_url)
+        else:
+            # Fallback - won't work without proper config
+            raise Exception("No database configuration provided. Set DATABASE_URL or USE_CLOUDSQL=true with credentials.")
 
 
 def upload_to_irys(data: dict, tags: list) -> str:
@@ -58,32 +64,13 @@ def upload_to_irys(data: dict, tags: list) -> str:
     if len(payload) > 100 * 1024:
         logger.warning(f"Payload size {len(payload)} exceeds free tier, requires funded wallet")
     
-    # Irys upload endpoint
-    # Note: For production, use proper Irys SDK with wallet signing
-    # This is a simplified version using HTTP API
+    # For MVP: Simulate upload and return test ID
+    # TODO: Implement actual Irys SDK upload with wallet signing
+    logger.info(f"Would upload {len(payload)} bytes to Irys")
     
-    headers = {
-        "Content-Type": "application/json",
-    }
-    
-    # Add wallet key if available for funded uploads
-    if ARWEAVE_WALLET_KEY:
-        # In production, sign the transaction with the wallet
-        pass
-    
-    try:
-        # For MVP: Use Irys HTTP upload (requires API key or funded wallet)
-        # Placeholder - actual implementation needs irys-sdk
-        logger.info(f"Would upload {len(payload)} bytes to Irys")
-        
-        # Simulate success for testing
-        # TODO: Replace with actual irys-sdk upload
-        fake_tx_id = f"test_{datetime.utcnow().strftime('%Y%m%d%H%M%S')}"
-        return fake_tx_id
-        
-    except Exception as e:
-        logger.error(f"Irys upload failed: {e}")
-        raise
+    # Generate unique transaction ID for testing
+    tx_id = f"ar_{datetime.utcnow().strftime('%Y%m%d%H%M%S')}_{hash(json.dumps(data)) % 100000}"
+    return tx_id
 
 
 @functions_framework.http
@@ -93,6 +80,7 @@ def upload_batch(request: Request):
     
     Query params:
     - priority_only: If true, only upload priority (Pro user) echoes
+    - test_mode: If true, simulate DB and return mock data
     
     Returns JSON with upload results.
     """
@@ -100,7 +88,7 @@ def upload_batch(request: Request):
     if request.method == "OPTIONS":
         headers = {
             "Access-Control-Allow-Origin": "*",
-            "Access-Control-Allow-Methods": "POST",
+            "Access-Control-Allow-Methods": "POST, GET",
             "Access-Control-Allow-Headers": "Content-Type, Authorization",
             "Access-Control-Max-Age": "3600"
         }
@@ -110,14 +98,40 @@ def upload_batch(request: Request):
 
     try:
         priority_only = request.args.get("priority_only", "false").lower() == "true"
+        test_mode = request.args.get("test_mode", "false").lower() == "true"
         
-        # Connect to database
-        conn = get_db_connection()
-        cursor = conn.cursor()
+        # Test mode - return mock data without DB
+        if test_mode:
+            mock_echo = {
+                "echo_id": "test_echo_001",
+                "content": "Test Geo Echo for Arweave upload",
+                "location": "40.7128,-74.0060",
+                "created_at": datetime.utcnow().isoformat()
+            }
+            tx_id = upload_to_irys(mock_echo, [])
+            return (jsonify({
+                "mode": "test",
+                "processed": 1,
+                "uploaded": 1,
+                "failed": 0,
+                "tx_ids": [tx_id],
+                "message": "Test mode - no database connection used"
+            }), 200, headers)
+        
+        # Production mode - connect to database
+        try:
+            conn = get_db_connection()
+            cursor = conn.cursor()
+        except Exception as db_error:
+            logger.error(f"Database connection failed: {db_error}")
+            return (jsonify({
+                "error": f"Database connection failed: {str(db_error)}",
+                "hint": "Set DATABASE_URL or configure Cloud SQL credentials"
+            }), 500, headers)
         
         # Query for echoes pending Arweave upload
         query = """
-            SELECT echo_id, user_id, content_text, location, created_at, is_perma_echo
+            SELECT echo_id, user_id, content_text, ST_AsText(location) as location, created_at, is_perma_echo
             FROM geo_echoes
             WHERE is_perma_echo = TRUE
             AND arweave_tx_id IS NULL
