@@ -1,0 +1,56 @@
+name: Deploy Arweave Uploader Cloud Function
+
+on:
+  push:
+    branches:
+      - master
+      - main
+  workflow_dispatch:
+
+env:
+  PROJECT_ID: "wandern-project-startup"
+  REGION: "us-central1"
+  FUNCTION_NAME: "arweave-uploader"
+  ENTRY_POINT: "upload_batch"
+  RUNTIME: "python311"
+
+jobs:
+  deploy:
+    name: Deploy Cloud Function
+    runs-on: ubuntu-latest
+    permissions:
+      contents: 'read'
+      id-token: 'write'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+
+      - name: Deploy Cloud Function
+        run: |
+          gcloud functions deploy ${{ env.FUNCTION_NAME }} \
+            --gen2 \
+            --runtime=${{ env.RUNTIME }} \
+            --region=${{ env.REGION }} \
+            --source=. \
+            --entry-point=${{ env.ENTRY_POINT }} \
+            --trigger-http \
+            --allow-unauthenticated \
+            --memory=512MB \
+            --timeout=300s \
+            --set-env-vars="INSTANCE_CONNECTION_NAME=wandern-project-startup:us-central1:wandern-postgres-instance-v3,DB_USER=wandern_user,DB_NAME=wandern,MODERATION_AGENT_URL=https://us-central1-wandern-project-startup.cloudfunctions.net/wandern-moderation-agent" \
+            --project=${{ env.PROJECT_ID }}
+
+      - name: Show Function URL
+        run: |
+          echo "Function deployed to: https://${{ env.REGION }}-${{ env.PROJECT_ID }}.cloudfunctions.net/${{ env.FUNCTION_NAME }}"
