@@ -82,87 +82,89 @@ def call_moderation_agent(content: str, content_type: str, media_url: str = None
         }
 
 
-def upload_to_irys(data: dict, tags: list) -> str:
+def upload_to_permanent_storage(data: dict, tags: list) -> str:
     """
-    Upload data to Arweave via Irys/Bundlr.
-    Uses FREE tier for uploads under 100KB.
+    Upload data to permanent storage via 4EVERLAND (IPFS + Arweave).
+    Uses S3-compatible API with 5GB free tier.
     
-    For small uploads (<100KB), Irys allows free uploads via their public node.
-    Returns real Arweave transaction ID.
+    Returns CID (Content ID) which is accessible at:
+    - https://ipfs.io/ipfs/{CID}
+    - https://4everland.io/ipfs/{CID}
+    - Eventually synced to Arweave
     """
     import hashlib
+    import boto3
+    from botocore.config import Config
     
     payload = json.dumps(data).encode('utf-8')
     payload_size = len(payload)
     
-    logger.info(f"Preparing to upload {payload_size} bytes to Irys")
+    logger.info(f"Uploading {payload_size} bytes to 4EVERLAND (IPFS+Arweave)")
     
-    # Check if within free tier
-    if payload_size > 100 * 1024:
-        logger.warning(f"Payload size {payload_size} bytes exceeds free tier (100KB)")
-        # For larger files, we'd need a funded wallet
-        # For now, return simulated ID and log warning
-        tx_id = f"ar_oversized_{datetime.utcnow().strftime('%Y%m%d%H%M%S')}_{hash(json.dumps(data)) % 100000}"
-        logger.warning(f"Simulated TX (oversized): {tx_id}")
-        return tx_id
+    # 4EVERLAND credentials from environment
+    ACCESS_KEY = os.environ.get("FOUREVERLAND_ACCESS_KEY", "9P6LEQXXUEWID0NU5OX7")
+    SECRET_KEY = os.environ.get("FOUREVERLAND_SECRET_KEY")
+    BUCKET = os.environ.get("FOUREVERLAND_BUCKET", "geoechoes")
+    ENDPOINT = os.environ.get("FOUREVERLAND_ENDPOINT", "https://endpoint.4everland.co")
+    
+    if not SECRET_KEY:
+        logger.warning("FOUREVERLAND_SECRET_KEY not set, using content-hash fallback")
+        content_hash = hashlib.sha256(payload).hexdigest()
+        return f"ipfs_pending_{content_hash[:32]}"
     
     try:
-        # Use ArDrive Turbo for free uploads (alternative to Irys)
-        # ArDrive allows free uploads under 100KB via their API
-        TURBO_API = "https://upload.ardrive.io/v1/data"
+        # Create S3 client for 4EVERLAND
+        s3_client = boto3.client(
+            's3',
+            endpoint_url=ENDPOINT,
+            aws_access_key_id=ACCESS_KEY,
+            aws_secret_access_key=SECRET_KEY,
+            config=Config(signature_version='s3v4')
+        )
         
-        # Prepare the data with tags
-        arweave_payload = {
-            "data": payload.decode('utf-8'),
-            "tags": tags
-        }
+        # Generate unique filename using content hash
+        content_hash = hashlib.sha256(payload).hexdigest()
+        echo_id = data.get("echo_id", "unknown")
+        filename = f"echoes/{echo_id}_{content_hash[:16]}.json"
         
-        with httpx.Client(timeout=60) as client:
-            # Try ArDrive Turbo first (most reliable free option)
-            response = client.post(
-                TURBO_API,
-                headers={
-                    "Content-Type": "application/json",
-                    "Accept": "application/json"
-                },
-                json=arweave_payload
-            )
-            
-            if response.status_code in [200, 201, 202]:
-                result = response.json()
-                tx_id = result.get("id") or result.get("dataTxId") or result.get("txId")
-                if tx_id:
-                    logger.info(f"✅ Real Arweave upload successful! TX: {tx_id}")
-                    return tx_id
-            
-            # Fallback: Try bundlr.network public endpoint
-            BUNDLR_API = "https://node1.bundlr.network/tx"
-            response = client.post(
-                BUNDLR_API,
-                headers={"Content-Type": "application/octet-stream"},
-                content=payload
-            )
-            
-            if response.status_code in [200, 201]:
-                result = response.json()
-                tx_id = result.get("id")
-                if tx_id:
-                    logger.info(f"✅ Bundlr upload successful! TX: {tx_id}")
-                    return tx_id
-            
-            # If direct upload fails, try Irys GraphQL mutation endpoint
-            logger.warning(f"Primary upload failed, status: {response.status_code}")
-            
+        # Upload to 4EVERLAND (IPFS + Arweave backed)
+        s3_client.put_object(
+            Bucket=BUCKET,
+            Key=filename,
+            Body=payload,
+            ContentType='application/json',
+            Metadata={
+                'app': 'wandern',
+                'type': 'geo-echo',
+                'echo_id': str(echo_id),
+                **{tag['name']: tag['value'] for tag in tags if 'name' in tag and 'value' in tag}
+            }
+        )
+        
+        # Get the IPFS CID
+        # 4EVERLAND returns CID in the response headers or via head_object
+        head = s3_client.head_object(Bucket=BUCKET, Key=filename)
+        cid = head.get('Metadata', {}).get('ipfs-hash') or head.get('ETag', '').strip('"')
+        
+        # Construct permanent URLs
+        ipfs_url = f"https://ipfs.io/ipfs/{cid}" if cid.startswith('Qm') or cid.startswith('bafy') else None
+        s3_url = f"https://{BUCKET}.4everland.link/{filename}"
+        
+        logger.info(f"✅ 4EVERLAND upload successful!")
+        logger.info(f"   S3 URL: {s3_url}")
+        if ipfs_url:
+            logger.info(f"   IPFS URL: {ipfs_url}")
+        
+        # Return CID or content-hash as permanent ID
+        permanent_id = cid if (cid.startswith('Qm') or cid.startswith('bafy')) else f"4ever_{content_hash[:32]}"
+        return permanent_id
+        
     except Exception as e:
-        logger.error(f"Irys upload failed: {e}")
-    
-    # Generate content-addressable hash as fallback ID
-    # This creates a deterministic ID based on content
-    content_hash = hashlib.sha256(payload).hexdigest()
-    tx_id = f"ar_pending_{content_hash[:32]}"
-    logger.warning(f"Using content-hash ID (pending real upload): {tx_id}")
-    
-    return tx_id
+        logger.error(f"4EVERLAND upload failed: {e}")
+        
+        # Fallback to content-hash ID
+        content_hash = hashlib.sha256(payload).hexdigest()
+        return f"ipfs_pending_{content_hash[:32]}"
 
 
 @functions_framework.http
@@ -206,7 +208,7 @@ def upload_batch(request: Request):
                 "location": "40.7128,-74.0060",
                 "created_at": datetime.utcnow().isoformat()
             }
-            tx_id = upload_to_irys(mock_echo, [])
+            tx_id = upload_to_permanent_storage(mock_echo, [])
             return (jsonify({
                 "mode": "test",
                 "processed": 1,
@@ -311,7 +313,7 @@ def upload_batch(request: Request):
                 ]
                 
                 # Upload to Arweave
-                tx_id = upload_to_irys(arweave_data, tags)
+                tx_id = upload_to_permanent_storage(arweave_data, tags)
                 
                 # Update database with Arweave tx_id
                 cursor.execute(
