@@ -101,8 +101,8 @@ def upload_to_permanent_storage(data: dict, tags: list) -> str:
     
     logger.info(f"Uploading {payload_size} bytes to 4EVERLAND (IPFS+Arweave)")
     
-    # 4EVERLAND credentials from environment
-    ACCESS_KEY = os.environ.get("FOUREVERLAND_ACCESS_KEY", "9P6LEQXXUEWID0NU5OX7")
+    # 4EVERLAND credentials from environment variables only (no hardcoded defaults)
+    ACCESS_KEY = os.environ.get("FOUREVERLAND_ACCESS_KEY")
     SECRET_KEY = os.environ.get("FOUREVERLAND_SECRET_KEY")
     BUCKET = os.environ.get("FOUREVERLAND_BUCKET", "geoechoes")
     ENDPOINT = os.environ.get("FOUREVERLAND_ENDPOINT", "https://endpoint.4everland.co")
